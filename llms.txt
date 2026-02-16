@@ -1,0 +1,343 @@
+# Quicknode RPC via x402
+
+> Pay-per-request blockchain RPC access using the x402 payment protocol. Authenticate with Sign-In with Ethereum (SIWE), pay with USDC stablecoins, and make JSON-RPC calls to 140+ blockchain networks. No signup, no API keys — just a wallet.
+
+## How it works
+
+Quicknode RPC via x402 lets you access blockchain data through standard JSON-RPC calls, paid for with USDC micropayments on Base. The flow is:
+
+1. **Authenticate** — Sign a SIWE (EIP-4361) message with your Ethereum wallet and exchange it for a JWT token at `POST /auth`.
+2. **Make RPC calls** — Send JSON-RPC requests to `POST /:network` with your JWT in the `Authorization: Bearer` header.
+3. **Pay when prompted** — When credits run out, the server returns HTTP 402. The `@x402/fetch` library automatically signs a USDC payment and retries. On testnet you receive 100 credits for $0.01 USDC; on mainnet you receive 1,000,000 credits for $10 USDC.
+4. **Repeat** — Credits are consumed (1 per successful JSON-RPC response). When exhausted, another 402 triggers a new payment automatically.
+
+Base URL: `https://x402.quicknode.com`
+
+Testnet (Base Sepolia, chain ID 84532) is available for development. A `/drip` endpoint provides free testnet USDC.
+
+## Bootstrapping (no existing wallet needed)
+
+You do not need a pre-existing wallet. To start from scratch on testnet:
+
+1. **Generate a wallet** — Use `generatePrivateKey()` and `privateKeyToAccount()` from `viem/accounts` to create a fresh Ethereum keypair.
+2. **Authenticate** — Sign a SIWE message and exchange it at `POST /auth` for a JWT (see Authentication section).
+3. **Request testnet USDC** — Call `POST /drip` with your JWT. This is a one-time faucet that sends USDC to your wallet on Base Sepolia.
+4. **Wait for USDC to arrive** — The faucet transaction is on-chain and takes a few seconds to confirm. Poll your wallet's USDC balance via `eth_call` on a public Base Sepolia RPC before proceeding. If you attempt a paid request before the USDC lands, the x402 payment will fail because the EIP-712 permit references a balance that does not yet exist on-chain.
+5. **Make RPC calls** — Once your wallet has USDC, the `@x402/fetch` wrapper handles all subsequent payment negotiation automatically.
+
+```typescript
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+
+// No existing key needed — generate one on the fly
+const privateKey = generatePrivateKey();
+const account = privateKeyToAccount(privateKey);
+// Store privateKey securely — you will need it for future sessions
+```
+
+## Authentication
+
+All endpoints except `/auth` require a JWT Bearer token. To get one:
+
+1. Construct a SIWE message (EIP-4361) with these required fields:
+   - `domain`: `x402.quicknode.com`
+   - `address`: your Ethereum wallet address
+   - `statement`: `I accept the Quicknode Terms of Service: https://www.quicknode.com/terms`
+   - `uri`: `https://x402.quicknode.com`
+   - `version`: `1`
+   - `chainId`: `84532` (Base Sepolia) or `8453` (Base Mainnet)
+   - `nonce`: at least 8 random characters (single-use)
+   - `issuedAt`: current ISO 8601 timestamp (must be within 5 minutes)
+
+2. Sign the message with your wallet's `signMessage` method.
+
+3. POST to `/auth` with JSON body `{ "message": "<SIWE string>", "signature": "0x<hex>" }`.
+
+4. Receive `{ "token": "<JWT>", "expiresAt": "<ISO datetime>", "accountId": "<CAIP-10 ID>" }`. The JWT expires in 1 hour.
+
+5. Include `Authorization: Bearer <JWT>` on all subsequent requests.
+
+## Making JSON-RPC calls
+
+Send a standard JSON-RPC request to `POST /:network`:
+
+```
+POST /ethereum-mainnet HTTP/1.1
+Authorization: Bearer <JWT>
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}
+```
+
+Replace `ethereum-mainnet` with any supported network slug (see Supported Networks section).
+
+When credits are available, you get the RPC response directly. When credits are depleted, you receive HTTP 402 with payment requirements in the response body and `PAYMENT-REQUIRED` header. The `@x402/fetch` library handles this automatically.
+
+## x402 Payment handling
+
+The x402 protocol uses HTTP 402 responses to negotiate payment. You can handle this manually or use the `@x402/fetch` npm package which automates the entire flow.
+
+**Automatic handling with @x402/fetch:**
+
+Install: `npm install @x402/fetch @x402/evm viem siwe`
+
+```typescript
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm';
+
+// Create an EVM signer from your wallet
+const evmSigner = toClientEvmSigner({
+  address: walletClient.account.address,
+  signTypedData: (params) => walletClient.signTypedData(params),
+});
+
+// Register the signer for Base Sepolia
+const client = new x402Client()
+  .register('eip155:84532', new ExactEvmScheme(evmSigner));
+
+// IMPORTANT: @x402/fetch passes a Request object (not url+init) on payment
+// retries. The inner fetch must handle both calling conventions or the JWT
+// will be silently dropped on the retry and the request will fail with 401.
+const authedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (input instanceof Request) {
+    const req = input.clone();
+    req.headers.set('Authorization', `Bearer ${jwtToken}`);
+    return fetch(req);
+  }
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${jwtToken}`);
+  return fetch(input, { ...init, headers });
+};
+
+const x402Fetch = wrapFetchWithPayment(authedFetch, client);
+
+// Use x402Fetch like normal fetch — payments happen transparently
+const response = await x402Fetch('https://x402.quicknode.com/base-sepolia', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+});
+```
+
+**Manual handling:**
+
+When you receive HTTP 402, the response body contains an `accepts` array describing payment options. Each entry includes `network` (CAIP-2 chain ID), `amount` (in smallest unit), `payTo` (recipient address), and `asset` (USDC contract address). Sign an EIP-712 typed data payment and include it as a base64-encoded `PAYMENT-SIGNATURE` header on your retry request.
+
+**Payment configuration:**
+
+| Environment | Chain ID | CAIP-2 | USDC Contract | Amount (raw) | Amount (USD) | Credits |
+|---|---|---|---|---|---|---|
+| Testnet | 84532 | eip155:84532 | 0x036CbD53842c5426634e7929541eC2318f3dCF7e | 10000 | $0.01 | 100 |
+| Mainnet | 8453 | eip155:8453 | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 | 10000000 | $10.00 | 1,000,000 |
+
+## Checking credits
+
+```
+GET /credits HTTP/1.1
+Authorization: Bearer <JWT>
+```
+
+Returns `{ "accountId": "<CAIP-10>", "credits": 95 }`.
+
+## Testnet faucet
+
+Request free testnet USDC (one-time per account, Base Sepolia only):
+
+```
+POST /drip HTTP/1.1
+Authorization: Bearer <JWT>
+```
+
+Returns `{ "accountId": "...", "walletAddress": "0x...", "transactionHash": "0x..." }`.
+
+## Endpoints
+
+- `POST /auth` — Exchange SIWE message + signature for JWT (public, no auth)
+- `GET /credits` — Check credit balance (JWT required)
+- `POST /drip` — Request testnet USDC (JWT required, Base Sepolia only, one-time)
+- `POST /:network` — JSON-RPC proxy to Quicknode (JWT + x402 payment)
+- `GET /:network/ws` — WebSocket proxy for persistent JSON-RPC (JWT required, credits must exist)
+
+## Rate limits
+
+- `/auth`: 10 requests per 10 seconds per IP
+- `/credits`: 50 requests per 10 seconds per account
+- `/drip`: 5 requests per 60 seconds per account
+- `/:network`: 1,000 requests per 10 seconds per network:account pair
+
+## Metering
+
+- JSON-RPC: 1 credit per successful (HTTP 200) response
+- WebSocket: 1 credit per successful JSON-RPC response message
+- Error responses and JSON-RPC errors are not metered
+
+## Error responses
+
+All errors return JSON: `{ "error": "<code>", "message": "<description>" }`.
+
+Common error codes: `invalid_json`, `missing_params`, `missing_token`, `invalid_token`, `token_expired`, `unsupported_network`, `rate_limit_exceeded`, `lifetime_limit_reached`.
+
+Testnet accounts have a 10,000 credit lifetime cap. After reaching the cap, upgrade to Base Mainnet (chain ID 8453).
+
+## Supported Networks
+
+### EVM Networks
+
+- `/ethereum-mainnet` — Ethereum Mainnet
+- `/ethereum-sepolia` — Ethereum Sepolia Testnet
+- `/base-mainnet` — Base Mainnet
+- `/base-sepolia` — Base Sepolia Testnet
+- `/arbitrum-mainnet` — Arbitrum One
+- `/arbitrum-sepolia` — Arbitrum Sepolia
+- `/optimism-mainnet` — Optimism Mainnet
+- `/optimism-sepolia` — Optimism Sepolia
+- `/matic-mainnet` — Polygon Mainnet
+- `/matic-amoy` — Polygon Amoy Testnet
+- `/bsc-mainnet` — BNB Smart Chain
+- `/bsc-testnet` — BNB Smart Chain Chapel
+- `/avalanche-mainnet` — Avalanche C-Chain
+- `/fantom-mainnet` — Fantom
+- `/linea-mainnet` — Linea
+- `/scroll-mainnet` — Scroll
+- `/zksync-mainnet` — zkSync
+- `/blast-mainnet` — Blast
+- `/mantle-mainnet` — Mantle
+- `/mode-mainnet` — Mode
+- `/zora-mainnet` — Zora (not in paths.json but in API docs)
+- `/sonic-mainnet` — Sonic
+- `/bera-mainnet` — Berachain
+- `/ink-mainnet` — Ink
+- `/unichain-mainnet` — Unichain
+- `/worldchain-mainnet` — World Chain
+- `/story-mainnet` — Story
+- `/hype-mainnet` — Hyperliquid
+- `/nova-mainnet` — Arbitrum Nova
+- `/strk-mainnet` — Starknet
+- `/zkevm-mainnet` — Polygon zkEVM
+- `/imx-mainnet` — Immutable X
+
+### Non-EVM Networks
+
+- `/solana-mainnet` — Solana Mainnet
+- `/solana-devnet` — Solana Devnet
+- `/btc-mainnet` — Bitcoin Mainnet
+- `/flow-mainnet` — Flow Mainnet
+- `/near-mainnet` — NEAR Mainnet
+- `/cosmos-mainnet` — Cosmos Hub
+- `/sui-mainnet` — Sui
+- `/aptos-mainnet` — Aptos
+- `/ton-mainnet` — TON
+- `/tron-mainnet` — TRON
+- `/dot-mainnet` — Polkadot
+- `/stacks-mainnet` — Stacks
+- `/stellar-mainnet` — Stellar
+- `/doge-mainnet` — Dogecoin
+- `/xrp-mainnet` — XRP Ledger
+- `/hedera-mainnet` — Hedera
+- `/celestia-mainnet` — Celestia
+- `/injective-mainnet` — Injective
+- `/osmosis-mainnet` — Osmosis
+- `/sei-pacific` — Sei
+
+Most networks also have testnets available (append `-testnet`, `-sepolia`, or `-devnet` to the slug).
+
+## Complete TypeScript example
+
+```typescript
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
+import { SiweMessage, generateNonce } from 'siwe';
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm';
+
+const BASE_URL = 'https://x402.quicknode.com';
+
+// 1. Set up wallet
+const walletClient = createWalletClient({
+  account: privateKeyToAccount('0xYOUR_PRIVATE_KEY'),
+  chain: baseSepolia,
+  transport: http(),
+});
+
+// 2. Authenticate with SIWE
+const siweMessage = new SiweMessage({
+  domain: 'x402.quicknode.com',
+  address: walletClient.account.address,
+  statement: 'I accept the Quicknode Terms of Service: https://www.quicknode.com/terms',
+  uri: BASE_URL,
+  version: '1',
+  chainId: 84532,
+  nonce: generateNonce(),
+  issuedAt: new Date().toISOString(),
+});
+
+const message = siweMessage.prepareMessage();
+const signature = await walletClient.signMessage({ message });
+
+const authResponse = await fetch(`${BASE_URL}/auth`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message, signature }),
+});
+const { token } = await authResponse.json();
+
+// 3. Create x402-enabled fetch (handles payments automatically)
+const evmSigner = toClientEvmSigner({
+  address: walletClient.account.address,
+  signTypedData: (params) => walletClient.signTypedData(params),
+});
+
+const client = new x402Client()
+  .register('eip155:84532', new ExactEvmScheme(evmSigner));
+
+// IMPORTANT: @x402/fetch passes a Request object (not url+init) on payment
+// retries, so the inner fetch must handle both calling conventions.
+const authedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (input instanceof Request) {
+    const req = input.clone();
+    req.headers.set('Authorization', `Bearer ${token}`);
+    return fetch(req);
+  }
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+};
+
+const x402Fetch = wrapFetchWithPayment(authedFetch, client);
+
+// 4. Make RPC calls — payment is automatic on 402
+const response = await x402Fetch(`${BASE_URL}/base-sepolia`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'eth_blockNumber',
+    params: [],
+  }),
+});
+
+const { result } = await response.json();
+console.log('Block number:', BigInt(result));
+
+// 5. Check remaining credits
+const creditsResponse = await fetch(`${BASE_URL}/credits`, {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const { credits } = await creditsResponse.json();
+console.log('Credits remaining:', credits);
+```
+
+## npm packages
+
+- `@x402/fetch` — Wraps `fetch` to automatically handle 402 payment negotiation
+- `@x402/evm` — EVM payment scheme (EIP-712 signing) for x402
+- `viem` — Ethereum wallet client, signing, and chain utilities
+- `siwe` — Sign-In with Ethereum (EIP-4361) message construction and signing
+
+## Optional
+
+### Additional documentation
+
+- [x402 Protocol](https://www.x402.org/): The x402 payment protocol specification
+- [SIWE (EIP-4361)](https://eips.ethereum.org/EIPS/eip-4361): Sign-In with Ethereum standard

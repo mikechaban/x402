@@ -1,0 +1,24 @@
+{
+  "name": "x402-quicknode-demo",
+  "version": "1.0.0",
+  "description": "Pay-per-request blockchain RPC via x402 — no API keys, no accounts, just a wallet.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/demo.js",
+    "demo:once": "node src/demo.js --once",
+    "demo:drain": "node src/demo.js --drain",
+    "credits": "node src/credits.js",
+    "drip": "node src/credits.js --drip"
+  },
+  "dependencies": {
+    "@x402/evm": "^2.3.1",
+    "@x402/fetch": "^2.3.0",
+    "dotenv": "^16.4.0",
+    "siwe": "^2.3.0",
+    "viem": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
