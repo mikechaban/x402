@@ -1,4 +1,4 @@
-# x402 QuickNode Demo
+# x402 Quicknode Demo
 
 > **Pay-per-request blockchain RPC — no API keys, no accounts, just a wallet.**
 >
@@ -24,6 +24,10 @@ npm run demo:once
 
 # 5. Run full demo — drain credits → 402 → auto-pay → retry
 npm run demo:drain
+
+# 6. Or launch the web UI
+npm run dev
+# Open http://localhost:3402
 ```
 
 ---
@@ -65,6 +69,7 @@ No signup. No subscription. No API keys. Just a wallet.
 | `npm run demo:drain` | `node src/demo.js --drain` | Drain credits → 402 → pay → retry |
 | `npm run credits` | `node src/credits.js` | Check credit balance |
 | `npm run drip` | `node src/credits.js --drip` | Request free testnet USDC |
+| `npm run dev` | `node src/server.js` | Web UI on http://localhost:3402 |
 
 ---
 
@@ -74,7 +79,7 @@ No signup. No subscription. No API keys. Just a wallet.
 
 ```
 ════════════════════════════════════════════════════════
-  x402 QuickNode Demo  ·  base-sepolia  ·  mode=once
+  x402 Quicknode Demo  ·  base-sepolia  ·  mode=once
 ════════════════════════════════════════════════════════
 
 ▸ Authenticating with SIWE
@@ -148,10 +153,30 @@ src/
   rpc.js       x402-wrapped JSON-RPC caller
   credits.js   GET /credits + POST /drip
   demo.js      Main demo flow (--once / --drain)
+  server.js    HTTP server for the web UI
   util.js      Logging, env loading, timing helpers
+public/
+  index.html   Single-page UI
+  style.css    Dark theme, monospace, minimal
+  app.js       SSE client, button handlers, flow diagram
 ```
 
-All files are ESM. Zero build step. Pure Node.js ≥ 18.
+All files are ESM. Zero build step. Zero frontend dependencies. Pure Node.js ≥ 18.
+
+---
+
+## Web UI
+
+Run `npm run dev` and open http://localhost:3402. The UI provides:
+
+- **Login** — authenticates via SIWE, shows wallet address
+- **Drip USDC** — requests free testnet USDC
+- **Single RPC Call** — one `eth_blockNumber`, shows result + credits
+- **Drain → 402 → Pay** — loops until 402 fires, auto-pays, retries
+- **Flow diagram** — lights up each step (Auth → RPC → 402 → Pay → Retry)
+- **Live timeline** — real-time SSE log with color-coded entries
+
+The server uses Node's built-in `http` module — no Express, no frameworks.
 
 ---
 

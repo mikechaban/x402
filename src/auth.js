@@ -25,7 +25,7 @@ export function createWallet(privateKey, chainId = 84532) {
 }
 
 /**
- * Authenticate with QuickNode x402 via SIWE → JWT.
+ * Authenticate with Quicknode x402 via SIWE → JWT.
  *
  * @param {object} walletClient  viem WalletClient
  * @param {string} baseUrl       e.g. https://x402.quicknode.com

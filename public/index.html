@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>x402 · Quicknode Demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span class="logo-icon">🟩</span>
+      <h1>x402 <span class="dim">· Quicknode</span></h1>
+    </div>
+    <p class="tagline">Pay-per-request RPC. No API keys. No signup</p>
+  </header>
+
+  <main>
+    <!-- ── Status bar ──────────────────────────────────── -->
+    <section class="status-bar" id="statusBar">
+      <div class="stat" id="statWallet">
+        <span class="stat-label">Wallet</span>
+        <span class="stat-value" id="walletAddr">—</span>
+      </div>
+      <div class="stat" id="statCredits">
+        <span class="stat-label">Credits</span>
+        <span class="stat-value" id="creditCount">—</span>
+      </div>
+      <div class="stat" id="statNetwork">
+        <span class="stat-label">Network</span>
+        <span class="stat-value">Base Sepolia</span>
+      </div>
+    </section>
+
+    <!-- ── Actions ─────────────────────────────────────── -->
+    <section class="actions">
+      <button id="btnLogin" class="btn btn-primary">
+        <span class="btn-icon">🔑</span> Login (SIWE)
+      </button>
+      <button id="btnDrip" class="btn" disabled>
+        <span class="btn-icon">💧</span> Drip USDC
+      </button>
+      <button id="btnOnce" class="btn" disabled>
+        <span class="btn-icon">⚡</span> Single RPC Call
+      </button>
+      <button id="btnDrain" class="btn btn-accent" disabled>
+        <span class="btn-icon">🔥</span> Drain → 402 → Pay
+      </button>
+      <button id="btnStop" class="btn btn-danger" disabled hidden>
+        <span class="btn-icon">■</span> Stop
+      </button>
+      <button id="btnCredits" class="btn" disabled>
+        <span class="btn-icon">📊</span> Check Credits
+      </button>
+    </section>
+
+    <!-- ── Flow diagram ────────────────────────────────── -->
+    <section class="flow">
+      <div class="flow-step" id="flow-auth">
+        <div class="flow-dot"></div>
+        <span>Auth</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" id="flow-rpc">
+        <div class="flow-dot"></div>
+        <span>RPC Call</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" id="flow-402">
+        <div class="flow-dot"></div>
+        <span>402</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" id="flow-pay">
+        <div class="flow-dot"></div>
+        <span>Auto-Pay</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" id="flow-retry">
+        <div class="flow-dot"></div>
+        <span>Retry ✔</span>
+      </div>
+    </section>
+
+    <!-- ── Timeline ────────────────────────────────────── -->
+    <section class="timeline-container">
+      <div class="timeline-header">
+        <h2>Timeline</h2>
+        <button id="btnClear" class="btn-small">Clear</button>
+      </div>
+      <div class="timeline" id="timeline">
+        <div class="timeline-empty">Click <strong>Login</strong> to begin</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>x402 protocol</span>
+    <span class="dim">·</span>
+    <span>USDC on Base Sepolia</span>
+    <span class="dim">·</span>
+    <span>No API keys</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

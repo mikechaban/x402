@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ─── x402 QuickNode Demo ───────────────────────────────────────
+// ─── x402 Quicknode Demo ───────────────────────────────────────
 //
 // Usage:
 //   node src/demo.js --once     Single RPC call (dry run)
@@ -22,7 +22,7 @@ async function main() {
   const env  = loadEnv();
   const caip2 = CAIP2_MAP[env.chainId] || 'eip155:84532';
 
-  log.banner(`x402 QuickNode Demo  ·  ${env.chainLabel}  ·  mode=${mode}`);
+  log.banner(`x402 Quicknode Demo  ·  ${env.chainLabel}  ·  mode=${mode}`);
 
   // ── Step 1: Login ─────────────────────────────────────────────
   const wallet = createWallet(env.privateKey, env.chainId);
@@ -46,9 +46,20 @@ async function main() {
 
   // ── Step 3: Build x402-enabled fetch ──────────────────────────
   // createX402Fetch wraps fetch with @x402/fetch so 402 responses
-  // trigger automatic USDC payment + retry. We detect the payment
-  // event by monitoring credit balance changes.
-  const x402Fetch = createX402Fetch(wallet, token, caip2);
+  // trigger automatic USDC payment + retry. We use hooks to detect
+  // the 402 → pay → retry cycle in real time.
+  let saw402 = false;
+  const x402Fetch = createX402Fetch(wallet, token, caip2, {
+    on402: () => {
+      saw402 = true;
+      log.divider();
+      log.payment('Received HTTP 402 — Payment Required');
+      log.payment('Auto-signing USDC payment…');
+    },
+    onPaymentRetry: () => {
+      log.payment('Retrying request with payment…');
+    },
+  });
 
   // ── Step 4: "once" mode ───────────────────────────────────────
   if (mode === 'once') {
@@ -63,67 +74,72 @@ async function main() {
   }
 
   // ── Step 5: "drain" mode ──────────────────────────────────────
-  log.step(`Drain mode: looping ${env.rpcMethod} until 402 triggers`);
-  log.info('Each successful response costs 1 credit.');
+  const initial = await getCredits(env.baseUrl, token).catch(() => ({ credits: '??' }));
+  let lastKnownCredits = initial.credits;
+  log.step(`Drain mode: ${lastKnownCredits} credits to burn (${env.rpcMethod})`);
+  log.info('Each successful response costs 1 credit. Throttled to ~4 req/s.');
   log.divider();
 
   let callNum = 0;
   let paid = false;
-  const creditsBefore = credits;
+  const CREDITS_CHECK_INTERVAL = 10;
+  const CALL_DELAY = 250;
 
   while (true) {
     callNum++;
 
-    // Check credits before each call so we can narrate the 402 moment
-    const pre = await getCredits(env.baseUrl, token).catch(() => ({ credits: '??' }));
+    // Check credits periodically to avoid 429 on /credits
+    if (callNum % CREDITS_CHECK_INTERVAL === 0) {
+      const pre = await getCredits(env.baseUrl, token).catch(() => null);
+      if (pre) lastKnownCredits = pre.credits;
+    } else {
+      if (typeof lastKnownCredits === 'number') lastKnownCredits--;
+    }
 
-    if (typeof pre.credits === 'number' && pre.credits <= 1 && !paid) {
+    if (typeof lastKnownCredits === 'number' && lastKnownCredits <= 3 && !paid) {
+      const precise = await getCredits(env.baseUrl, token).catch(() => null);
+      if (precise) lastKnownCredits = precise.credits;
       log.divider();
-      log.warn(`Credits about to hit zero (${pre.credits}). Next call will trigger 402…`);
+      log.warn(`Credits low (${lastKnownCredits}). 402 imminent…`);
       log.divider();
     }
 
-    const creditsBefore402 = pre.credits;
-    const { result, ms, status } = await rpcCall(x402Fetch, env.baseUrl, env.network, env.rpcMethod);
+    // Reset per-call detection
+    saw402 = false;
 
-    // After the call, check credits again
-    const post = await getCredits(env.baseUrl, token).catch(() => ({ credits: '??' }));
+    const { result, ms } = await rpcCall(x402Fetch, env.baseUrl, env.network, env.rpcMethod);
 
-    // Detect the payment event: credits jumped up
-    if (typeof post.credits === 'number' && typeof creditsBefore402 === 'number') {
-      if (post.credits > creditsBefore402) {
-        if (!paid) {
-          log.divider();
-          log.payment('Received HTTP 402 — Payment Required');
-          log.payment('x402 auto-paid USDC → credits replenished!');
-          log.payment(`Credits: ${creditsBefore402} → ${post.credits}`);
-          log.ok(`Request #${callNum} retried and succeeded: ${result}  (${ms} ms)`);
-          log.divider();
-          paid = true;
-        }
-      }
+    // The hooks fired during the call if a 402 happened
+    if (saw402 && !paid) {
+      paid = true;
+      await sleep(2000);
+      const post = await getCredits(env.baseUrl, token).catch(() => ({ credits: '??' }));
+      log.payment(`Credits replenished → ${post.credits}`);
+      log.ok(`Request #${callNum} succeeded after payment: ${result}  (${ms} ms)`);
+      log.divider();
     }
 
     if (!paid) {
-      log.info(`#${callNum}  result=${result}  credits=${post.credits}  (${ms} ms)`);
+      log.info(`#${callNum}  result=${result}  credits=${lastKnownCredits}  (${ms} ms)`);
     }
 
-    // Once we've seen the payment cycle, do one more call to prove it works, then stop
     if (paid) {
       log.step('Verifying: one more call after replenishment');
       const verify = await rpcCall(x402Fetch, env.baseUrl, env.network, env.rpcMethod);
       log.ok(`Result: ${verify.result}  (${verify.ms} ms)`);
+      await sleep(1000);
       const final = await getCredits(env.baseUrl, token);
       log.ok(`Final credits: ${final.credits}`);
       break;
     }
 
-    // Safety valve — don't loop forever
-    if (callNum > 200) {
-      log.warn('Reached 200 calls without seeing 402. Stopping.');
+    if (callNum > 500) {
+      log.warn('Reached 500 calls without seeing 402. Stopping.');
       log.info('Your account may have too many credits. Try again after they drain.');
       break;
     }
+
+    await sleep(CALL_DELAY);
   }
 
   // ── Summary ──────────────────────────────────────────────────

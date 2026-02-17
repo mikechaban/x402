@@ -8,7 +8,8 @@
     "demo:once": "node src/demo.js --once",
     "demo:drain": "node src/demo.js --drain",
     "credits": "node src/credits.js",
-    "drip": "node src/credits.js --drip"
+    "drip": "node src/credits.js --drip",
+    "dev": "node src/server.js"
   },
   "dependencies": {
     "@x402/evm": "^2.3.1",
